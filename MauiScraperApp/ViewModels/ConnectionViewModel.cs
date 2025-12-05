@@ -39,13 +39,10 @@ public partial class ConnectionViewModel : ObservableObject
     [RelayCommand]
     private async Task ConnectAsync()
     {
-        if (string.IsNullOrWhiteSpace(ServerIp))
-        {
-            await Shell.Current.DisplayAlert("Error", "Invalid IP or Port", "OK");
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(ServerIp)) return;
 
-        // Handle Port parsing safely
+        // Clean up input
+        string ip = ServerIp.Replace("http://", "").Replace("https://", "").TrimEnd('/');
         if (!int.TryParse(ServerPort, out int port)) port = 5000;
 
         try
@@ -53,25 +50,21 @@ public partial class ConnectionViewModel : ObservableObject
             IsConnecting = true;
             StatusMessage = "Connecting...";
             
-            // This runs on a background thread usually
-            bool success = await _remoteClient.ConnectAsync(ServerIp, port);
+            bool success = await _remoteClient.ConnectAsync(ip, port);
 
             if (success)
             {
                 IsConnected = true;
-                StatusMessage = $"Connected to {ServerIp}:{port}";
+                StatusMessage = $"Connected to {ip}";
                 
-                // CRITICAL FIX FOR iOS: Force Navigation on Main Thread
-                MainThread.BeginInvokeOnMainThread(async () => 
-                {
-                    await Shell.Current.GoToAsync("//MainTabs");
-                });
+                // CRITICAL FIX: Navigate to the PAGE ("//SearchView"), not the Container ("//MainTabs")
+                await NavigateToMainApp();
             }
             else
             {
                 IsConnected = false;
                 StatusMessage = "Connection failed";
-                await Shell.Current.DisplayAlert("Failed", "Could not connect. Check IP/Port and Firewall.", "OK");
+                await Shell.Current.DisplayAlert("Failed", "Could not connect.", "OK");
             }
         }
         catch (Exception ex)
@@ -90,33 +83,14 @@ public partial class ConnectionViewModel : ObservableObject
         try
         {
             IsScanning = true;
-            StatusMessage = "Scanning network...";
+            StatusMessage = "Scanning...";
             DiscoveredServers.Clear();
-
             List<string> servers = await _remoteClient.DiscoverServersAsync();
-
-            foreach (var server in servers)
-            {
-                DiscoveredServers.Add(server);
-            }
-
-            if (servers.Count > 0)
-            {
-                StatusMessage = $"Found {servers.Count} server(s)";
-            }
-            else
-            {
-                StatusMessage = "No servers found";
-            }
+            foreach (var server in servers) DiscoveredServers.Add(server);
+            StatusMessage = servers.Count > 0 ? $"Found {servers.Count}" : "None found";
         }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Error: {ex.Message}";
-        }
-        finally
-        {
-            IsScanning = false;
-        }
+        catch { StatusMessage = "Scan Error"; }
+        finally { IsScanning = false; }
     }
 
     [RelayCommand]
@@ -134,16 +108,37 @@ public partial class ConnectionViewModel : ObservableObject
         StatusMessage = "Disconnected";
     }
 
+    // CHANGED: Must be async Task, not void
     [RelayCommand]
-    private void ContinueToApp()
+    private async Task ContinueToApp()
     {
         if (IsConnected)
         {
-            // CRITICAL FIX FOR iOS: Force Navigation on Main Thread
-            MainThread.BeginInvokeOnMainThread(async () => 
-            {
-                await Shell.Current.GoToAsync("//MainTabs");
-            });
+            await NavigateToMainApp();
         }
+    }
+
+    // Helper to ensure robust navigation on iOS
+    private async Task NavigateToMainApp()
+    {
+        // Force onto Main Thread
+        await MainThread.InvokeOnMainThreadAsync(async () =>
+        {
+            try 
+            {
+                // Small delay to allow button animation to finish (prevents iOS swallowing the input)
+                await Task.Delay(100);
+                
+                // Use absolute route to the SPECIFIC TAB PAGE
+                // "///" resets the stack (Good for login flows)
+                await Shell.Current.GoToAsync("///SearchView");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Nav Error: {ex.Message}");
+                // Fallback: If route fails, this forces the switch
+                await Shell.Current.GoToAsync("//MainTabs");
+            }
+        });
     }
 }
