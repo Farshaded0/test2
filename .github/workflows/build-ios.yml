@@ -28,15 +28,14 @@ jobs:
     - name: Restore Dependencies
       run: dotnet restore
     
-    # Disable trimming and linking to avoid Xcode version issues
+    # Disable linking only (PublishTrimmed must be true for iOS)
     - name: Publish .NET MAUI iOS
       run: |
         dotnet publish -f net8.0-ios -c Release -r ios-arm64 \
         -p:ArchiveOnBuild=false \
         -p:EnableCodeSigning=false \
         -p:_RequiresIpaSigning=false \
-        -p:MtouchLink=None \
-        -p:PublishTrimmed=false
+        -p:MtouchLink=None
     
     - name: Package into IPA
       run: |
