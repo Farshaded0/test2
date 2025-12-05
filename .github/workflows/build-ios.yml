@@ -1,0 +1,59 @@
+name: Build iOS IPA (Unsigned)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14 # Uses a fast Apple Silicon Cloud Mac
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Install MAUI Workload
+      run: dotnet workload install maui
+
+    - name: Restore Dependencies
+      run: dotnet restore
+
+    # 1. Publish the App (Generates the .app file)
+    # We disable signing checks here so it builds without an Apple ID
+    - name: Publish .NET MAUI iOS
+      run: |
+        dotnet publish -f net8.0-ios -c Release -r ios-arm64 \
+        -p:ArchiveOnBuild=false \
+        -p:EnableCodeSigning=false \
+        -p:_RequiresIpaSigning=false
+
+    # 2. Create the IPA structure manually (Required for AltStore/Sideloading)
+    # This takes the raw binary and wraps it in the format iPhone expects
+    - name: Package into IPA
+      run: |
+        # Go to the build output
+        cd bin/Release/net8.0-ios/ios-arm64/publish/
+        
+        # Create the Payload folder (Apple standard requirement)
+        mkdir Payload
+        
+        # Move the app bundle into Payload
+        mv *.app Payload/
+        
+        # Zip it to create the IPA
+        zip -r MauiScraperApp.ipa Payload
+        
+        # Move it up to the root so the upload step can find it
+        mv MauiScraperApp.ipa ../../../../../
+
+    # 3. Upload the IPA so you can download it from GitHub
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MauiScraperApp-iOS
+        path: MauiScraperApp.ipa
