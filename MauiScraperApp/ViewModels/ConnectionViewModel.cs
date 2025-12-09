@@ -16,6 +16,9 @@ public partial class ConnectionViewModel : ObservableObject
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _statusMessage = "";
 
+    // DEBUG MODE: Set to TRUE to see alerts on the iPhone
+    private bool _debugMode = true;
+
     public ObservableCollection<string> DiscoveredServers { get; } = new();
 
     public ConnectionViewModel(RemoteClientService remoteClient)
@@ -39,41 +42,71 @@ public partial class ConnectionViewModel : ObservableObject
     [RelayCommand]
     private async Task ConnectAsync()
     {
-        if (string.IsNullOrWhiteSpace(ServerIp)) return;
-
-        // Clean up input
-        string ip = ServerIp.Replace("http://", "").Replace("https://", "").TrimEnd('/');
-        if (!int.TryParse(ServerPort, out int port)) port = 5000;
+        if (string.IsNullOrWhiteSpace(ServerIp) || !int.TryParse(ServerPort, out int port))
+        {
+            await Shell.Current.DisplayAlert("Error", "Invalid IP or Port", "OK");
+            return;
+        }
 
         try
         {
             IsConnecting = true;
             StatusMessage = "Connecting...";
-            
-            bool success = await _remoteClient.ConnectAsync(ip, port);
+
+            bool success = await _remoteClient.ConnectAsync(ServerIp, port);
 
             if (success)
             {
                 IsConnected = true;
-                StatusMessage = $"Connected to {ip}";
+                StatusMessage = $"Connected to {ServerIp}:{port}";
                 
-                // CRITICAL FIX: Navigate to the PAGE ("//SearchView"), not the Container ("//MainTabs")
-                await NavigateToMainApp();
+                if (_debugMode) 
+                    await Shell.Current.DisplayAlert("Debug", "Connection OK. Navigating...", "OK");
+                
+                // Auto-Navigate
+                await Shell.Current.GoToAsync("//MainTabs");
             }
             else
             {
                 IsConnected = false;
                 StatusMessage = "Connection failed";
-                await Shell.Current.DisplayAlert("Failed", "Could not connect.", "OK");
+                await Shell.Current.DisplayAlert("Failed", "Could not connect to Bridge.\nCheck IP/Port and Firewall.", "OK");
             }
         }
         catch (Exception ex)
         {
             StatusMessage = $"Error: {ex.Message}";
+            await Shell.Current.DisplayAlert("Error", ex.Message, "OK");
         }
         finally
         {
             IsConnecting = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task ContinueToApp()
+    {
+        // DEBUG: Proves the button is being clicked
+        if (_debugMode) 
+            await Shell.Current.DisplayAlert("Debug", $"Button Clicked.\nIsConnected: {IsConnected}", "OK");
+
+        if (IsConnected)
+        {
+            try
+            {
+                // Absolute routing to the TabBar
+                await Shell.Current.GoToAsync("//MainTabs");
+            }
+            catch (Exception ex)
+            {
+                // Catch routing errors (e.g., if MainTabs isn't found)
+                await Shell.Current.DisplayAlert("Nav Error", ex.Message, "OK");
+            }
+        }
+        else
+        {
+            await Shell.Current.DisplayAlert("Disconnected", "Please connect to the PC first.", "OK");
         }
     }
 
@@ -83,14 +116,30 @@ public partial class ConnectionViewModel : ObservableObject
         try
         {
             IsScanning = true;
-            StatusMessage = "Scanning...";
+            StatusMessage = "Scanning network...";
             DiscoveredServers.Clear();
+
+            // Explicit List<string> to avoid ambiguity
             List<string> servers = await _remoteClient.DiscoverServersAsync();
-            foreach (var server in servers) DiscoveredServers.Add(server);
-            StatusMessage = servers.Count > 0 ? $"Found {servers.Count}" : "None found";
+
+            foreach (var server in servers)
+            {
+                DiscoveredServers.Add(server);
+            }
+
+            if (servers.Count > 0)
+                StatusMessage = $"Found {servers.Count} server(s)";
+            else
+                StatusMessage = "No servers found";
         }
-        catch { StatusMessage = "Scan Error"; }
-        finally { IsScanning = false; }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsScanning = false;
+        }
     }
 
     [RelayCommand]
@@ -106,39 +155,5 @@ public partial class ConnectionViewModel : ObservableObject
         _remoteClient.Disconnect();
         IsConnected = false;
         StatusMessage = "Disconnected";
-    }
-
-    // CHANGED: Must be async Task, not void
-    [RelayCommand]
-    private async Task ContinueToApp()
-    {
-        if (IsConnected)
-        {
-            await NavigateToMainApp();
-        }
-    }
-
-    // Helper to ensure robust navigation on iOS
-    private async Task NavigateToMainApp()
-    {
-        // Force onto Main Thread
-        await MainThread.InvokeOnMainThreadAsync(async () =>
-        {
-            try 
-            {
-                // Small delay to allow button animation to finish (prevents iOS swallowing the input)
-                await Task.Delay(100);
-                
-                // Use absolute route to the SPECIFIC TAB PAGE
-                // "///" resets the stack (Good for login flows)
-                await Shell.Current.GoToAsync("///SearchView");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Nav Error: {ex.Message}");
-                // Fallback: If route fails, this forces the switch
-                await Shell.Current.GoToAsync("//MainTabs");
-            }
-        });
     }
 }
