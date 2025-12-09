@@ -15,8 +15,7 @@ public class RemoteClientService
     public RemoteClientService()
     {
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        
-        // CRITICAL: Cloudflare often blocks requests without a User Agent
+        // Required for Cloudflare Tunnel requests
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "MauiScraperApp/1.0");
     }
 
@@ -24,23 +23,21 @@ public class RemoteClientService
     {
         string url;
 
-        // LOGIC: Check if the input is a Domain Name (Cloudflare) or an IP (Local)
-        // If it has a dot and isn't an IP, assume it's a domain requiring HTTPS
+        // SMART DETECTION:
+        // If it has letters and dots (e.g. jellyfin.u2qrct8.dpdns.org), assume Domain/HTTPS
+        // If it is IPv4 (e.g. 192.168.1.50), assume Local/HTTP
         if (Uri.CheckHostName(host) != UriHostNameType.IPv4 && host.Contains("."))
         {
-            // Cloudflare Tunnel -> Force HTTPS, Default Port (443 implied)
             url = $"https://{host}"; 
         }
         else
         {
-            // Local Network -> Force HTTP, Use specified Port
             url = $"http://{host}:{port}";
         }
 
         try 
         {
-            // Use a cancellation token to respect the timeout
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             var response = await _httpClient.GetAsync($"{url}/api/torrent/ping", cts.Token);
             
             if (response.IsSuccessStatusCode) 
@@ -50,8 +47,6 @@ public class RemoteClientService
                 {
                     _serverUrl = url; 
                     IsConnected = true;
-                    
-                    // Save the inputs for next time
                     Preferences.Set("last_ip", host); 
                     Preferences.Set("last_port", port);
                     return true;
@@ -59,15 +54,14 @@ public class RemoteClientService
             }
         } 
         catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Connection Failed: {ex.Message}");
+        { 
+            System.Diagnostics.Debug.WriteLine($"Conn Error: {ex.Message}");
         }
         
         IsConnected = false; 
         return false;
     }
 
-    // Renamed back to match ConnectionViewModel
     public (string ip, int port) GetSavedConnectionInfo() 
     {
         return (Preferences.Get("last_ip", ""), Preferences.Get("last_port", 5000));
@@ -75,52 +69,7 @@ public class RemoteClientService
 
     public void Disconnect() { _serverUrl = null; IsConnected = false; }
 
-    // Restored Discovery Logic (Only works for Local LAN)
-    public async Task<List<string>> DiscoverServersAsync()
-    {
-        var discovered = new List<string>();
-        var localIp = GetLocalIPAddress();
-        if (string.IsNullOrEmpty(localIp)) return discovered;
-
-        // Get network prefix (e.g., 192.168.1.)
-        var prefix = localIp.Substring(0, localIp.LastIndexOf('.') + 1);
-        var tasks = new List<Task>();
-
-        // Scan range 
-        for (int i = 1; i < 255; i++)
-        {
-            var ip = prefix + i;
-            tasks.Add(Task.Run(async () => 
-            {
-                try 
-                {
-                    using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(200) };
-                    var resp = await client.GetAsync($"http://{ip}:5000/api/torrent/ping");
-                    if (resp.IsSuccessStatusCode)
-                    {
-                        lock (discovered) discovered.Add(ip);
-                    }
-                } 
-                catch { }
-            }));
-        }
-
-        await Task.WhenAll(tasks);
-        return discovered;
-    }
-
-    private string GetLocalIPAddress()
-    {
-        try {
-            var host = Dns.GetHostEntry(Dns.GetHostName());
-            foreach (var ip in host.AddressList) {
-                if (ip.AddressFamily == AddressFamily.InterNetwork) return ip.ToString();
-            }
-        } catch { }
-        return "";
-    }
-
-    // --- API CALLS ---
+    // --- API ---
     public async Task<List<RemoteTorrentInfo>> GetTorrentsAsync()
     {
         if (!IsConnected) return new();
@@ -158,10 +107,49 @@ public class RemoteClientService
             return JsonConvert.DeserializeObject<List<DriveInfoModel>>(s) ?? new();
         } catch { return new(); }
     }
+
+    // --- DISCOVERY ---
+    public async Task<List<string>> DiscoverServersAsync()
+    {
+        var discovered = new List<string>();
+        var localIp = GetLocalIPAddress();
+        if (string.IsNullOrEmpty(localIp)) return discovered;
+
+        var prefix = localIp.Substring(0, localIp.LastIndexOf('.') + 1);
+        var tasks = new List<Task>();
+
+        // Scan 1-255
+        for (int i = 1; i < 255; i++)
+        {
+            var ip = prefix + i;
+            tasks.Add(Task.Run(async () => 
+            {
+                try 
+                {
+                    using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(200) };
+                    var resp = await client.GetAsync($"http://{ip}:5000/api/torrent/ping");
+                    if (resp.IsSuccessStatusCode) lock (discovered) discovered.Add(ip);
+                } 
+                catch { }
+            }));
+        }
+        await Task.WhenAll(tasks);
+        return discovered;
+    }
+
+    private string GetLocalIPAddress()
+    {
+        try {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList) {
+                if (ip.AddressFamily == AddressFamily.InterNetwork) return ip.ToString();
+            }
+        } catch { }
+        return "";
+    }
 }
 
-// --- MODELS ---
-
+// Ensure the Helper Models are present (same as before)
 public class DriveInfoModel
 {
     public string Name { get; set; }
@@ -177,7 +165,6 @@ public class DriveInfoModel
 public partial class RemoteTorrentInfo : ObservableObject
 {
     public string Hash { get; set; }
-    
     [ObservableProperty] private string _name;
     [ObservableProperty] private long _size;
     [ObservableProperty] private double _progress;
@@ -200,7 +187,6 @@ public partial class RemoteTorrentInfo : ObservableObject
         if (Name != fresh.Name) Name = fresh.Name;
         if (State != fresh.State) State = fresh.State;
         if (SavePath != fresh.SavePath) SavePath = fresh.SavePath;
-
         if (Size != fresh.Size) { Size = fresh.Size; OnPropertyChanged(nameof(SizeFormatted)); }
         if (Progress != fresh.Progress) { Progress = fresh.Progress; OnPropertyChanged(nameof(ProgressPercent)); }
         if (DownloadSpeed != fresh.DownloadSpeed) { DownloadSpeed = fresh.DownloadSpeed; OnPropertyChanged(nameof(DownloadSpeedFormatted)); }
