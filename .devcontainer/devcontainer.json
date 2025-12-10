@@ -1,0 +1,31 @@
+{
+  "name": ".NET MAUI iOS Build Environment",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:8.0",
+  
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  "features": {
+    "ghcr.io/devcontainers/features/dotnet:1": {
+      "version": "8.0"
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csharp",
+        "ms-dotnettools.csdevkit"
+      ]
+    }
+  },
+
+  "forwardPorts": [],
+  
+  "remoteUser": "vscode"
+}
